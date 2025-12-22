@@ -1,0 +1,113 @@
+  Short:        Open Project files on Workbench with the DefIcons DefaultTool
+  Uploader:     toolkit@amigazen.com
+  Author:       amigazen project
+  Type:         util/misc
+  Version:      47.1
+  Architecture: m68k-amigaos >= 3.2
+  Distribution: Aminet
+  Kurz:         Universeller Dateiöffner für Amiga Workbench mit DefIcons
+
+  ProjectX is a universal file opener for Amiga Workbench that allows you to
+  set a single DefaultTool on project icons, which then dynamically determines
+  and launches the appropriate application based on the file type.
+
+  Features:
+  - Works as a universal DefaultTool for any project file type
+  - Automatically identifies file types using icon.library and DefIcons
+  - Looks up DefaultTools from DefIcons def_XXX.info files
+  - Launches applications in Workbench mode using the Workbench API (OpenWorkbenchObjectA)
+
+  Requirements:
+  - AmigaOS 3.2 or higher (requires icon.library V47+ with ICONGETA_IdentifyBuffer and requester.class)
+  - DefIcons 47.8 or higher (for file type identification)
+
+  Usage:
+  ProjectX is designed to be set as the DefaultTool on project icons. When you
+  double-click a project file that has ProjectX as its DefaultTool, ProjectX
+  will:
+
+  1. Identify the file type using DefIcons
+  2. Look up the corresponding def_XXX.info icon in ENV:Sys/ or ENVARC:Sys/
+  3. Extract the DefaultTool from that icon
+  4. Launch the tool with the project file
+
+  Setup:
+  1. Copy ProjectX to SYS:C/ or your preferred location in a Path that Workbench will find
+  2. Open the Information window for any project icon
+  3. Set "ProjectX" as the DefaultTool
+  4. Double-click the project icon to launch it with the appropriate tool
+
+  How It Works:
+  ProjectX solves the problem of hardcoded DefaultTools in project icons.
+  Instead of each project icon pointing directly to its application (which
+  breaks when files are moved or tools are relocated), ProjectX acts as an
+  intermediary that:
+
+  - Uses DefIcons' file type identification to determine what kind of file it is
+  - Looks up the user's preferred tool for that file type from DefIcons'
+    def_XXX.info files
+  - Launches that tool using the Workbench API, passing the project file
+
+  This allows you to:
+  - Share project files without worrying about tool paths
+  - Change your preferred tool for a file type system-wide
+  - Use different tools for the same file type in different workflows
+  - Have a single DefaultTool setting that works for all file types
+
+  DefIcons Integration:
+  ProjectX relies on DefIcons for file type identification. DefIcons must be
+  running and configured with rules for the file types you want to use with
+  ProjectX. The def_XXX.info icons in ENV:Sys/ or ENVARC:Sys/ must have a
+  DefaultTool set.
+
+  Examples:
+  - Set ProjectX as the DefaultTool on a text file icon
+    → ProjectX identifies it as "ascii" type
+    → Looks up def_ascii.info and finds "TextEdit" as the DefaultTool
+    → Launches TextEdit with the text file
+
+  - Set ProjectX as the DefaultTool on an image file icon
+    → ProjectX identifies it as "png" type
+    → Looks up def_png.info and finds "MultiView" as the DefaultTool
+    → Launches MultiView with the image file
+
+  Limitations:
+  - If the def_XXX.info that matches does not have a default tool, but the parent file type does, currently 
+  ProjectX has no way to find the parent file type and look for a DefaultTool in the parent icon instead
+  - Requires DefIcons to be running
+  - The def_XXX.info icon must therefore exist in ENV:Sys or ENVARC:Sys and have a DefaultTool set
+  - Requires AmigaOS 3.2 or 4.1 as it requires DefIcons and the latest versions of icon.library and workbench.library
+
+  For more information, and to report issues, visit:
+  - GitHub: https://github.com/amigazen/ProjectX/
+  - Web: http://www.amigazen.com/toolkit/
+
+  This software is Free and Open Source Software distributed on BSD-2 license terms:
+
+  Copyright (c) 2025 amigazen project
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+  1. Redistributions of source code must retain the above copyright notice,
+     this list of conditions and the following disclaimer.
+
+  2. Redistributions in binary form must reproduce the above copyright notice,
+     this list of conditions and the following disclaimer in the documentation
+     and/or other materials provided with the distribution.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  POSSIBILITY OF SUCH DAMAGE.
+
+  amigazen project philosophy is based on openness:
+  Open to anyone and everyone - Open source and free for all - Open your mind and create!
