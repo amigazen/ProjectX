@@ -1,0 +1,46 @@
+# SMakefile for ProjectX - Universal File Opener
+# 
+# ProjectX opens project files using their default tools from DefIcons
+# or system default icons, bypassing hardcoded default tools in .info files
+#
+
+# Program name
+PROGRAM = ProjectX
+
+# Source files
+SRCS = projectx.c
+
+# Object files
+OBJS = projectx.o
+
+# Compiler and linker
+CC = sc
+LINK = slink
+
+# Default target
+all: $(PROGRAM)
+
+# Create the ProjectX executable
+$(PROGRAM): $(OBJS)
+	$(LINK) FROM sc:lib/c.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB sc:lib/sc.lib lib:small.lib BATCH
+
+# Compile the source files
+.c.o:
+	$(CC) $*.c OBJNAME=$*.o IDIR=include:
+
+# Compile ProjectX files
+projectx.o: projectx.c
+	$(CC) projectx.c OBJNAME=projectx.o IDIR=include:
+
+# Clean target
+clean:
+	Delete $(OBJS) $(PROGRAM) projectx.o
+
+# Install target
+install:
+	@echo "Installing ProjectX to SDK/Tools/ProjectX..."
+	@copy $(PROGRAM) to /SDK/C/$(PROGRAM) CLONE
+
+# Dependencies
+projectx.o: projectx.c
+
