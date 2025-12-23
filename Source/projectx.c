@@ -28,11 +28,8 @@
 #include <proto/utility.h>
 #include <proto/graphics.h>
 #include <proto/input.h>
-#include <proto/rexxsyslib.h>
 #include <devices/input.h>
 #include <devices/inputevent.h>
-#include <rexx/storage.h>
-#include <rexx/errors.h>
 #include <dos/dostags.h>
 #include <dos/rdargs.h>
 #include <string.h>
@@ -49,7 +46,6 @@ extern struct Library *UtilityBase;
 struct MsgPort *InputPort = NULL;
 struct IOStdReq *InputIO = NULL;
 struct Library *InputBase = NULL;
-/* RexxSysBase is declared in proto/rexxsyslib.h - no need to redeclare */
 
 /* Reaction class library bases */
 struct ClassLibrary *RequesterBase = NULL;
@@ -72,10 +68,10 @@ STRPTR GetProjectXName(struct WBStartup *wbs);
 BOOL IsDirectory(STRPTR fileName, BPTR fileLock);
 STRPTR GetToolTypeValue(struct DiskObject *icon, STRPTR toolTypeName);
 BOOL IsLeftAmigaHeld(VOID);
-BOOL SendRexxCommandToWorkbench(STRPTR command);
 BOOL HandleDrawerMode(STRPTR drawerPath);
+BOOL MakeToolboxDrawer(STRPTR drawerPath, STRPTR toolName);
 
-static const char *verstag = "$VER: ProjectX 47.1 (21.12.2025)\n";
+static const char *verstag = "$VER: ProjectX 47.2 (23.12.2025)\n";
 static const char *stack_cookie = "$STACK: 4096\n";
 
 /* Application variables */
@@ -94,14 +90,16 @@ int main(int argc, char *argv[])
     fromWorkbench = (argc == 0);
     
     if (!fromWorkbench) {
-        /* CLI mode - check for DRAWER option */
+        /* CLI mode - check for DRAWER or TOOLBOX/TOOL options */
         struct RDArgs *rdargs;
         STRPTR drawerPath = NULL;
-        STRPTR args[1] = {NULL}; /* DRAWER/K - one string pointer */
-        CONST_STRPTR template = "DRAWER/K";
+        STRPTR toolboxPath = NULL;
+        STRPTR toolName = NULL;
+        STRPTR args[3] = {NULL, NULL, NULL}; /* DRAWER/K, TOOLBOX/K, TOOL/K */
+        CONST_STRPTR template = "DRAWER/K,TOOLBOX/K,TOOL/K";
         LONG errorCode;
         
-        /* Initialize libraries first (needed for ReadArgs and HandleDrawerMode) */
+        /* Initialize libraries first (needed for ReadArgs and HandleDrawerMode/MakeToolboxDrawer) */
         if (!InitializeLibraries()) {
             return RETURN_FAIL;
         }
@@ -112,6 +110,24 @@ int main(int argc, char *argv[])
         
         if (rdargs != NULL) {
             drawerPath = args[0];
+            toolboxPath = args[1];
+            toolName = args[2];
+            
+            /* Check for mutual exclusivity: DRAWER and TOOLBOX cannot both be specified */
+            if (drawerPath != NULL && *drawerPath != '\0' && toolboxPath != NULL && *toolboxPath != '\0') {
+                /* Both specified - invalid */
+                FreeArgs(rdargs);
+                Cleanup();
+                return RETURN_FAIL;
+            }
+            
+            /* Check if TOOLBOX is specified but TOOL is missing */
+            if (toolboxPath != NULL && *toolboxPath != '\0' && (toolName == NULL || *toolName == '\0')) {
+                /* TOOLBOX specified but TOOL is missing - invalid */
+                FreeArgs(rdargs);
+                Cleanup();
+                return RETURN_FAIL;
+            }
             
             if (drawerPath != NULL && *drawerPath != '\0') {
                 /* Handle drawer opening mode */
@@ -124,14 +140,25 @@ int main(int argc, char *argv[])
                     Cleanup();
                     return RETURN_FAIL;
                 }
+            } else if (toolboxPath != NULL && *toolboxPath != '\0') {
+                /* Handle toolbox drawer creation mode (TOOL is guaranteed to be present here) */
+                if (MakeToolboxDrawer(toolboxPath, toolName)) {
+                    FreeArgs(rdargs);
+                    Cleanup();
+                    return RETURN_OK;
+                } else {
+                    FreeArgs(rdargs);
+                    Cleanup();
+                    return RETURN_FAIL;
+                }
             } else {
-                /* ReadArgs succeeded but no DRAWER argument provided */
+                /* ReadArgs succeeded but no valid arguments provided */
                 FreeArgs(rdargs);
                 Cleanup();
                 return RETURN_FAIL;
             }
         } else {
-            /* ReadArgs failed - show error and usage */
+            /* ReadArgs failed - return error (no stdout available with cback.o) */
             Cleanup();
             return RETURN_FAIL;
         }
@@ -261,9 +288,6 @@ BOOL InitializeLibraries(VOID)
         }
     }
     
-    /* Open rexxsyslib.library for ARexx commands (optional - not critical) */
-    RexxSysBase = OpenLibrary("rexxsyslib.library", 0);
-    
     return TRUE;
 }
 
@@ -328,11 +352,6 @@ VOID Cleanup(VOID)
     if (InputPort != NULL) {
         DeleteMsgPort(InputPort);
         InputPort = NULL;
-    }
-    
-    if (RexxSysBase != NULL) {
-        CloseLibrary(RexxSysBase);
-        RexxSysBase = NULL;
     }
     
     if (projectXName != NULL) {
@@ -536,7 +555,7 @@ STRPTR GetToolTypeValue(struct DiskObject *icon, STRPTR toolTypeName)
     return toolTypeValue;
 }
 
-/* Check if left Amiga key is currently held down */
+/* Check if Right Shift key is currently held down */
 BOOL IsLeftAmigaHeld(VOID)
 {
     UWORD qualifier;
@@ -548,66 +567,12 @@ BOOL IsLeftAmigaHeld(VOID)
     /* PeekQualifier returns the current qualifier state */
     qualifier = PeekQualifier();
     
-    /* Check if left Amiga key (LCOMMAND) is held */
+    /* Check if Right Shift key (LCOMMAND) is held */
     if (qualifier & IEQUALIFIER_RSHIFT) {
         return TRUE;
     }
     
     return FALSE;
-}
-
-/* Send an ARexx command to Workbench (non-blocking) */
-BOOL SendRexxCommandToWorkbench(STRPTR command)
-{
-    struct RexxMsg *rmsg;
-    struct MsgPort *port;
-    STRPTR argString;
-    BOOL success = FALSE;
-    
-    if (RexxSysBase == NULL || command == NULL) {
-        return FALSE;
-    }
-    
-    /* Find the Workbench ARexx port */
-    port = FindPort("WORKBENCH");
-    if (port == NULL) {
-        return FALSE;
-    }
-    
-    /* Create an argument string for the command */
-    argString = CreateArgstring(command, strlen(command));
-    if (argString == NULL) {
-        return FALSE;
-    }
-    
-    /* Create a Rexx message */
-    rmsg = CreateRexxMsg(port, NULL, NULL);
-    if (rmsg != NULL) {
-        /* Fill the message with our command */
-        /* RXCOMM = command type, RXFF_RESULT = request result string */
-        /* FillRexxMsg takes: rmsg, action, flags */
-        FillRexxMsg(rmsg, RXCOMM, RXFF_RESULT);
-        /* Set the argument string directly in the message */
-        rmsg->rm_Args[0] = argString;
-        
-        /* Send the message asynchronously - don't wait for reply */
-        /* This avoids deadlock - Workbench will process it after we exit */
-        PutMsg(port, (struct Message *)rmsg);
-        
-        /* Don't wait for reply - just assume success if message was sent */
-        /* Workbench will process the command after ProjectX exits */
-        success = TRUE;
-        
-        /* Note: We don't clean up the message here - Workbench will reply to it */
-        /* and the message will be cleaned up by the system */
-    }
-    
-    /* Free the argument string */
-    if (argString != NULL) {
-        DeleteArgstring(argString);
-    }
-    
-    return success;
 }
 
 /* Check if tool name is ProjectX (to prevent infinite loops) */
@@ -683,16 +648,18 @@ VOID ShowErrorDialog(STRPTR title, STRPTR message)
 }
 
 /* Show confirmation dialog before launching tool */
+/* NOTE: Currently bypassed - always returns TRUE (code kept for future multi-tool selection) */
 BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName)
 {
     Object *reqobj;
     char title[256];
-    UWORD qualifier;
-    BOOL shiftHeld;
-    UBYTE shiftStatus[64];
     char message[512];
     ULONG result;
     
+    /* Bypass confirmation dialog for now - always proceed */
+    return TRUE;
+    
+    /* Code below kept for future use when we want to offer tool selection */
     if (RequesterClass == NULL) {
         /* Requester class not available - default to yes */
         return TRUE;
@@ -702,28 +669,12 @@ BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName)
     Strncpy(title, "ProjectX", 255);
     title[255] = '\0';
     
-    /* Check left Amiga key status */
-    if (InputBase != NULL) {
-        qualifier = PeekQualifier();
-        shiftHeld = (qualifier & IEQUALIFIER_RSHIFT) ? TRUE : FALSE;
-        SNPrintf(shiftStatus, sizeof(shiftStatus),
-            "Left Amiga: %s (qualifier=0x%04x, InputBase=0x%08lx)",
-            shiftHeld ? "HELD" : "NOT HELD",
-            qualifier,
-            (ULONG)InputBase);
-    } else {
-        SNPrintf(shiftStatus, sizeof(shiftStatus),
-            "Left Amiga: UNAVAILABLE (InputBase=%p)",
-            InputBase);
-    }
-    
     sprintf(message,
             "\n\n"
             "File: %s\n\n"
             "Tool: %s\n\n"
-            "%s\n\n"
             "Launch this tool?\n\n",
-            fileName, toolName, shiftStatus);
+            fileName, toolName);
     
     /* Create the requester object with confirmation type */
     reqobj = NewObject(RequesterClass, NULL,
@@ -881,9 +832,9 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
             return FALSE;
         }
         
-        /* Check if left Amiga key is held - if so, spawn second process to open drawer */
+        /* Check if Right Shift key is held - if so, spawn second process to open drawer */
         if (IsLeftAmigaHeld()) {
-            /* Left Amiga key held - spawn a second process to handle drawer opening */
+            /* Right Shift key held - spawn a second process to handle drawer opening */
             /* This avoids the ERROR_OBJECT_IN_USE issue because the second process */
             /* doesn't have the WBStartup lock */
             UBYTE command[512];
@@ -939,7 +890,7 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
         FreeDiskObject(projectIcon);
         projectIcon = NULL;
         
-        /* Left Amiga key not held - show confirmation dialog with the full directory path */
+        /* Right Shift key not held - show confirmation dialog with the full directory path */
         confirmed = ShowConfirmDialog(fullDirPath, toolboxValueCopy);
         if (!confirmed) {
             /* User clicked No - return FALSE but don't show error */
@@ -1370,5 +1321,284 @@ BOOL HandleDrawerMode(STRPTR drawerPath)
         }
     }
     Cleanup();
+    return success;
+}
+
+/* Make a toolbox drawer: convert a drawer icon to a project-drawer with ProjectX as default tool */
+/* drawerPath: full path to the drawer */
+/* toolName: name of the tool inside the drawer (without path) */
+BOOL MakeToolboxDrawer(STRPTR drawerPath, STRPTR toolName)
+{
+    struct DiskObject *drawerIcon = NULL;
+    struct DiskObject *toolIcon = NULL;
+    UBYTE fullToolPath[512];
+    UBYTE fullDirPath[512];
+    UBYTE iconPath[512];
+    UBYTE projectXPath[256];
+    STRPTR *oldToolTypes = NULL;
+    STRPTR *newToolTypes = NULL;
+    LONG toolTypeCount = 0;
+    LONG i;
+    LONG toolboxIndex = -1;
+    BOOL success = FALSE;
+    BPTR drawerLock = NULL;
+    BPTR toolLock = NULL;
+    BPTR progDirLock = NULL;
+    
+    if (drawerPath == NULL || *drawerPath == '\0' || toolName == NULL || *toolName == '\0') {
+        return FALSE;
+    }
+    
+    /* Libraries should already be initialized by main(), but check anyway */
+    if (IconBase == NULL || WorkbenchBase == NULL || DOSBase == NULL) {
+        if (!InitializeLibraries()) {
+            return FALSE;
+        }
+    }
+    
+    /* Copy drawer path and remove trailing slash if present */
+    Strncpy(fullDirPath, drawerPath, sizeof(fullDirPath) - 1);
+    fullDirPath[sizeof(fullDirPath) - 1] = '\0';
+    {
+        LONG len = strlen((char *)fullDirPath);
+        if (len > 0 && fullDirPath[len - 1] == '/') {
+            fullDirPath[len - 1] = '\0';
+        }
+    }
+    
+    /* Construct icon path by appending .info */
+    {
+        LONG baseLen = strlen((char *)fullDirPath);
+        if (baseLen + 5 >= sizeof(iconPath)) { /* 5 = strlen(".info") + null terminator */
+            return FALSE;
+        }
+        Strncpy(iconPath, fullDirPath, sizeof(iconPath) - 1);
+        iconPath[sizeof(iconPath) - 1] = '\0';
+        Strncpy(iconPath + baseLen, ".info", sizeof(iconPath) - baseLen);
+        iconPath[sizeof(iconPath) - 1] = '\0';
+    }
+    
+    /* Construct full path to tool inside drawer */
+    Strncpy(fullToolPath, fullDirPath, sizeof(fullToolPath) - 1);
+    fullToolPath[sizeof(fullToolPath) - 1] = '\0';
+    AddPart(fullToolPath, toolName, sizeof(fullToolPath));
+    
+    /* Verify drawer exists */
+    drawerLock = Lock((UBYTE *)fullDirPath, SHARED_LOCK);
+    if (drawerLock == NULL) {
+        return FALSE;
+    }
+    UnLock(drawerLock);
+    
+    /* Verify tool exists and is a tool */
+    toolLock = Lock((UBYTE *)fullToolPath, SHARED_LOCK);
+    if (toolLock == NULL) {
+        return FALSE;
+    }
+    
+    /* Load tool icon and verify it's a WBTOOL type */
+    toolIcon = GetDiskObject(fullToolPath);
+    UnLock(toolLock);
+    
+    if (toolIcon == NULL) {
+        return FALSE;
+    }
+    
+    if (toolIcon->do_Type != WBTOOL) {
+        FreeDiskObject(toolIcon);
+        return FALSE;
+    }
+    
+    FreeDiskObject(toolIcon);
+    toolIcon = NULL;
+    
+    /* Load drawer icon */
+    drawerIcon = GetDiskObject(fullDirPath);
+    if (drawerIcon == NULL) {
+        return FALSE;
+    }
+    
+    /* Verify it's a WBDRAWER type */
+    if (drawerIcon->do_Type != WBDRAWER) {
+        FreeDiskObject(drawerIcon);
+        return FALSE;
+    }
+    
+    /* Get ProjectX path using PROGDIR: */
+    progDirLock = Lock("PROGDIR:", ACCESS_READ);
+    if (progDirLock != NULL) {
+        NameFromLock(progDirLock, projectXPath, sizeof(projectXPath));
+        UnLock(progDirLock);
+        AddPart(projectXPath, "ProjectX", sizeof(projectXPath));
+    } else {
+        /* Fallback: just use "ProjectX" (assumes it's in PATH) */
+        Strncpy(projectXPath, "ProjectX", sizeof(projectXPath) - 1);
+        projectXPath[sizeof(projectXPath) - 1] = '\0';
+    }
+    
+    /* Count existing tooltypes and find TOOLBOX if it exists */
+    if (drawerIcon->do_ToolTypes != NULL) {
+        for (i = 0; drawerIcon->do_ToolTypes[i] != NULL; i++) {
+            toolTypeCount++;
+            /* Check if this is TOOLBOX */
+            if (Strnicmp((UBYTE *)drawerIcon->do_ToolTypes[i], (UBYTE *)"TOOLBOX=", 8) == 0) {
+                toolboxIndex = i;
+            }
+        }
+    }
+    
+    /* Allocate new tooltype array */
+    /* We need space for: existing tooltypes + TOOLBOX (if not found) + NULL terminator */
+    /* If TOOLBOX exists, we'll replace it, so same count */
+    {
+        LONG newCount = toolTypeCount;
+        if (toolboxIndex < 0) {
+            newCount++; /* Need to add TOOLBOX */
+        }
+        newCount++; /* NULL terminator */
+        
+        newToolTypes = (STRPTR *)AllocMem(newCount * sizeof(STRPTR), MEMF_CLEAR | MEMF_PUBLIC);
+        if (newToolTypes == NULL) {
+            FreeDiskObject(drawerIcon);
+            return FALSE;
+        }
+    }
+    
+    /* Copy existing tooltypes and add/update TOOLBOX */
+    {
+        LONG newIndex = 0;
+        UBYTE toolboxToolType[128];
+        
+        /* Build TOOLBOX tooltype string */
+        SNPrintf(toolboxToolType, sizeof(toolboxToolType), "TOOLBOX=%s", toolName);
+        
+        /* Copy existing tooltypes, replacing TOOLBOX if found */
+        if (drawerIcon->do_ToolTypes != NULL) {
+            for (i = 0; drawerIcon->do_ToolTypes[i] != NULL; i++) {
+                if (i == toolboxIndex) {
+                    /* Replace existing TOOLBOX */
+                    newToolTypes[newIndex] = (STRPTR)AllocMem(strlen((char *)toolboxToolType) + 1, MEMF_PUBLIC);
+                    if (newToolTypes[newIndex] == NULL) {
+                        /* Free what we allocated so far */
+                        {
+                            LONG j;
+                            for (j = 0; j < newIndex; j++) {
+                                FreeMem(newToolTypes[j], strlen((char *)newToolTypes[j]) + 1);
+                            }
+                        }
+                        FreeMem(newToolTypes, (toolTypeCount + (toolboxIndex < 0 ? 2 : 1)) * sizeof(STRPTR));
+                        FreeDiskObject(drawerIcon);
+                        return FALSE;
+                    }
+                    {
+                        LONG toolTypeLen = strlen((char *)toolboxToolType);
+                        Strncpy((UBYTE *)newToolTypes[newIndex], toolboxToolType, toolTypeLen + 1);
+                    }
+                    newIndex++;
+                } else {
+                    /* Copy existing tooltype */
+                    LONG len = strlen((char *)drawerIcon->do_ToolTypes[i]);
+                    newToolTypes[newIndex] = (STRPTR)AllocMem(len + 1, MEMF_PUBLIC);
+                    if (newToolTypes[newIndex] == NULL) {
+                        /* Free what we allocated so far */
+                        {
+                            LONG j;
+                            for (j = 0; j < newIndex; j++) {
+                                FreeMem(newToolTypes[j], strlen((char *)newToolTypes[j]) + 1);
+                            }
+                        }
+                        FreeMem(newToolTypes, (toolTypeCount + (toolboxIndex < 0 ? 2 : 1)) * sizeof(STRPTR));
+                        FreeDiskObject(drawerIcon);
+                        return FALSE;
+                    }
+                    Strncpy((UBYTE *)newToolTypes[newIndex], (UBYTE *)drawerIcon->do_ToolTypes[i], len + 1);
+                    newIndex++;
+                }
+            }
+        }
+        
+        /* Add TOOLBOX if it wasn't found */
+        if (toolboxIndex < 0) {
+            newToolTypes[newIndex] = (STRPTR)AllocMem(strlen((char *)toolboxToolType) + 1, MEMF_PUBLIC);
+            if (newToolTypes[newIndex] == NULL) {
+                /* Free what we allocated so far */
+                {
+                    LONG j;
+                    for (j = 0; j < newIndex; j++) {
+                        FreeMem(newToolTypes[j], strlen((char *)newToolTypes[j]) + 1);
+                    }
+                }
+                FreeMem(newToolTypes, (toolTypeCount + 2) * sizeof(STRPTR));
+                FreeDiskObject(drawerIcon);
+                return FALSE;
+            }
+            {
+                LONG toolTypeLen = strlen((char *)toolboxToolType);
+                Strncpy((UBYTE *)newToolTypes[newIndex], toolboxToolType, toolTypeLen + 1);
+            }
+            newIndex++;
+        }
+        
+        /* NULL terminator */
+        newToolTypes[newIndex] = NULL;
+    }
+    
+    /* Save old tooltypes pointer */
+    oldToolTypes = drawerIcon->do_ToolTypes;
+    
+    /* Update drawer icon */
+    drawerIcon->do_Type = WBPROJECT;
+    drawerIcon->do_DefaultTool = (STRPTR)AllocMem(strlen((char *)projectXPath) + 1, MEMF_PUBLIC);
+    if (drawerIcon->do_DefaultTool == NULL) {
+        /* Free new tooltypes */
+        {
+            LONG j;
+            for (j = 0; newToolTypes[j] != NULL; j++) {
+                FreeMem(newToolTypes[j], strlen((char *)newToolTypes[j]) + 1);
+            }
+        }
+        FreeMem(newToolTypes, (toolTypeCount + (toolboxIndex < 0 ? 2 : 1)) * sizeof(STRPTR));
+        drawerIcon->do_ToolTypes = oldToolTypes;
+        FreeDiskObject(drawerIcon);
+        return FALSE;
+    }
+    {
+        LONG pathLen = strlen((char *)projectXPath);
+        Strncpy((UBYTE *)drawerIcon->do_DefaultTool, projectXPath, pathLen + 1);
+    }
+    drawerIcon->do_ToolTypes = newToolTypes;
+    
+    /* Save the icon (PutDiskObject will make copies of the strings) */
+    SetIoErr(0);
+    PutDiskObject(fullDirPath, drawerIcon);
+    if (IoErr() != 0) {
+        SetIoErr(0);
+        PutDiskObject(iconPath, drawerIcon);
+    }
+    
+    if (IoErr() == 0) {
+        success = TRUE;
+    }
+    
+    /* Restore old tooltypes pointer before freeing */
+    drawerIcon->do_ToolTypes = oldToolTypes;
+    
+    /* Free the new default tool string */
+    if (drawerIcon->do_DefaultTool != NULL) {
+        FreeMem(drawerIcon->do_DefaultTool, strlen((char *)drawerIcon->do_DefaultTool) + 1);
+        drawerIcon->do_DefaultTool = NULL;
+    }
+    
+    /* Free new tooltypes (PutDiskObject has made copies, so we can free these) */
+    {
+        LONG j;
+        for (j = 0; newToolTypes[j] != NULL; j++) {
+            FreeMem(newToolTypes[j], strlen((char *)newToolTypes[j]) + 1);
+        }
+    }
+    FreeMem(newToolTypes, (toolTypeCount + (toolboxIndex < 0 ? 2 : 1)) * sizeof(STRPTR));
+    
+    FreeDiskObject(drawerIcon);
+    
     return success;
 }

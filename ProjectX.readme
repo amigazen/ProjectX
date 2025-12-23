@@ -2,7 +2,7 @@
   Uploader:     toolkit@amigazen.com
   Author:       amigazen project
   Type:         util/misc
-  Version:      47.1
+  Version:      47.2
   Architecture: m68k-amigaos >= 3.2
   Distribution: Aminet
   Kurz:         Universeller Dateiöffner für Amiga Workbench mit DefIcons
@@ -16,12 +16,16 @@
   - Automatically identifies file types using icon.library and DefIcons
   - Looks up DefaultTools from DefIcons def_XXX.info files
   - Launches applications in Workbench mode using the Workbench API (OpenWorkbenchObjectA)
+  - Toolbox drawers: Convert drawer icons to project-drawers that launch tools inside them
+  - Modifier key support: Hold Right Shift while double-clicking a toolbox drawer to open it as a normal drawer window
 
   Requirements:
   - AmigaOS 3.2 or higher (requires icon.library V47+ with ICONGETA_IdentifyBuffer and requester.class)
   - DefIcons 47.8 or higher (for file type identification)
 
   Usage:
+  
+  As DefaultTool (Workbench mode):
   ProjectX is designed to be set as the DefaultTool on project icons. When you
   double-click a project file that has ProjectX as its DefaultTool, ProjectX
   will:
@@ -30,6 +34,23 @@
   2. Look up the corresponding def_XXX.info icon in ENV:Sys/ or ENVARC:Sys/
   3. Extract the DefaultTool from that icon
   4. Launch the tool with the project file
+
+  Command-line mode:
+  
+  Creating Toolbox Drawers:
+  ProjectX can convert drawer icons to "toolbox drawers" - drawers that act
+  like tools. When you double-click a toolbox drawer, it launches a tool
+  inside the drawer instead of opening the drawer window.
+
+  To create a toolbox drawer:
+    ProjectX TOOLBOX=<drawer path> TOOL=<tool name>
+  
+  Example:
+    ProjectX TOOLBOX=Work:MyApp TOOL=MyAppTool
+  
+  This mode is used internally when you hold Right Shift on a toolbox drawer.
+  It temporarily changes the icon type to open the drawer, then restores it
+  when the drawer is closed.
 
   Setup:
   1. Copy ProjectX to SYS:C/ or your preferred location in a Path that Workbench will find
@@ -70,6 +91,12 @@
     → ProjectX identifies it as "png" type
     → Looks up def_png.info and finds "MultiView" as the DefaultTool
     → Launches MultiView with the image file
+
+  - Create a toolbox drawer for an application:
+    → ProjectX TOOLBOX=Work:MyApp TOOL=MyAppTool
+    → Converts MyApp drawer to a project-drawer
+    → Double-clicking MyApp launches MyAppTool inside it
+    → Hold Right Shift and double-click to open MyApp as a drawer window
 
   Limitations:
   - If the def_XXX.info that matches does not have a default tool, but the parent file type does, currently 

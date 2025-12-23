@@ -23,7 +23,7 @@ all: $(PROGRAM)
 # Create the ProjectX executable
 # Use cback.o for detachable process support (allows spawning independent processes)
 $(PROGRAM): $(OBJS)
-	$(LINK) FROM sc:lib/cback.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB sc:lib/sc.lib lib:small.lib BATCH
+	$(LINK) FROM sc:lib/cback.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB lib:small.lib sc:lib/sc.lib BATCH
 
 # Compile the source files
 .c.o:
