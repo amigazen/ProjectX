@@ -21,8 +21,9 @@ LINK = slink
 all: $(PROGRAM)
 
 # Create the ProjectX executable
+# Use cback.o for detachable process support (allows spawning independent processes)
 $(PROGRAM): $(OBJS)
-	$(LINK) FROM sc:lib/c.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB sc:lib/sc.lib lib:small.lib BATCH
+	$(LINK) FROM sc:lib/cback.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB sc:lib/sc.lib lib:small.lib BATCH
 
 # Compile the source files
 .c.o:
@@ -38,7 +39,7 @@ clean:
 
 # Install target
 install:
-	@echo "Installing ProjectX to SDK/Tools/ProjectX..."
+	@echo "Installing ProjectX to SDK/C/ProjectX..."
 	@copy $(PROGRAM) to /SDK/C/$(PROGRAM) CLONE
 
 # Dependencies
