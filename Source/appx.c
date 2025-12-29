@@ -79,14 +79,9 @@ Class *RequesterClass = NULL;
 BOOL InitializeLibraries(VOID);
 BOOL InitializeApplication(VOID);
 VOID Cleanup(VOID);
-BOOL IsDefIconsRunning(VOID);
 VOID ShowErrorDialog(STRPTR title, STRPTR message);
 BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName);
-BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock);
-STRPTR GetFileTypeIdentifier(STRPTR fileName, BPTR fileLock);
-STRPTR GetDefaultToolFromType(STRPTR typeIdentifier, STRPTR defIconNameOut, ULONG defIconNameSize);
-BOOL IsAppX(STRPTR toolName);
-STRPTR GetAppXName(struct WBStartup *wbs);
+BOOL OpenToolboxDrawer(STRPTR fileName, BPTR fileLock);
 BOOL IsDirectory(STRPTR fileName, BPTR fileLock);
 STRPTR GetToolTypeValue(struct DiskObject *icon, STRPTR toolTypeName);
 BOOL IsLeftAmigaHeld(VOID);
@@ -99,7 +94,6 @@ long oslibversion  = 47L;
 
 
 /* Application variables */
-static STRPTR appXName = NULL;
 
 /* Main entry point */
 int main(int argc, char *argv[])
@@ -216,23 +210,10 @@ int main(int argc, char *argv[])
         return RETURN_FAIL;
     }
     
-    /* Get our own name for loop detection */
-    appXName = GetAppXName(wbs);
-    
-    /* Check if DefIcons is running */
-    if (!IsDefIconsRunning()) {
-        ShowErrorDialog("AppX", 
-            "\nDefIcons is not running.\n\n"
-            "AppX requires DefIcons to identify file types.\n"
-            "Please start DefIcons and try again.\n");
-        Cleanup();
-        return RETURN_FAIL;
-    }
-    
     /* Check if we have any file arguments */
     if (wbs->sm_NumArgs <= 1) {
         /* No files to process - show error */
-        ShowErrorDialog("AppX", "\nNo file specified.\n\nAppX must be set as the default tool on a project icon.\n");
+        ShowErrorDialog("AppX", "\nNo directory specified.\n\nAppX must be set as the default tool on a toolbox drawer icon.\n");
         Cleanup();
         return RETURN_FAIL;
     }
@@ -245,8 +226,8 @@ int main(int argc, char *argv[])
             /* Change to the file's directory */
             oldDir = CurrentDir(wbarg->wa_Lock);
             
-            /* Open the file with its default tool */
-            if (!OpenFileWithDefaultTool(wbarg->wa_Name, wbarg->wa_Lock)) {
+            /* Open the toolbox drawer */
+            if (!OpenToolboxDrawer(wbarg->wa_Name, wbarg->wa_Lock)) {
                 success = FALSE;
             }
             
@@ -388,149 +369,6 @@ VOID Cleanup(VOID)
         InputPort = NULL;
     }
     
-    if (appXName != NULL) {
-        FreeVec(appXName);
-        appXName = NULL;
-    }
-}
-
-/* Check if DefIcons is running by looking for its message port */
-BOOL IsDefIconsRunning(VOID)
-{
-    struct MsgPort *port;
-    
-    /* Look for the DEFICONS message port */
-    port = FindPort("DEFICONS");
-    
-    if (port != NULL) {
-        return TRUE;
-    }
-    return FALSE;
-}
-
-/* Get file type identifier using icon.library identification */
-STRPTR GetFileTypeIdentifier(STRPTR fileName, BPTR fileLock)
-{
-    static UBYTE typeBuffer[256];
-    struct TagItem tags[4];
-    LONG errorCode = 0;
-    struct DiskObject *icon = NULL;
-    BPTR oldDir = NULL;
-    
-    /* Initialize buffer */
-    typeBuffer[0] = '\0';
-    
-    /* Change to file's directory for identification */
-    if (fileLock != NULL) {
-        oldDir = CurrentDir(fileLock);
-    }
-    
-    /* Set up tags for identification only */
-    tags[0].ti_Tag = ICONGETA_IdentifyBuffer;
-    tags[0].ti_Data = (ULONG)typeBuffer;
-    tags[1].ti_Tag = ICONGETA_IdentifyOnly;
-    tags[1].ti_Data = TRUE;
-    tags[2].ti_Tag = ICONA_ErrorCode;
-    tags[2].ti_Data = (ULONG)&errorCode;
-    tags[3].ti_Tag = TAG_DONE;
-    
-    /* Get file type identifier */
-    /* Note: With ICONGETA_IdentifyOnly, GetIconTagList returns NULL */
-    /* but the type identifier is placed in the buffer */
-    icon = GetIconTagList(fileName, tags);
-    
-    /* If icon was returned (shouldn't happen with IdentifyOnly), free it */
-    if (icon) {
-        FreeDiskObject(icon);
-    }
-    
-    /* Restore original directory */
-    if (oldDir != NULL) {
-        CurrentDir(oldDir);
-    }
-    
-    /* Return the type identifier, or NULL if identification failed */
-    /* Check both errorCode and that buffer has content */
-    if (errorCode == 0 && typeBuffer[0] != '\0') {
-        return typeBuffer;
-    }
-    
-    return NULL;
-}
-
-/* Get default tool from file type identifier */
-/* Returns the default tool, or NULL if not found */
-/* defIconNameOut will contain the name of the def_ icon that was tried */
-STRPTR GetDefaultToolFromType(STRPTR typeIdentifier, STRPTR defIconNameOut, ULONG defIconNameSize)
-{
-    struct DiskObject *defaultIcon = NULL;
-    STRPTR defaultTool = NULL;
-    UBYTE defIconName[64];
-    BPTR oldDir = NULL;
-    BPTR envDir = NULL;
-    
-    if (!typeIdentifier || *typeIdentifier == '\0') {
-        if (defIconNameOut && defIconNameSize > 0) {
-            defIconNameOut[0] = '\0';
-        }
-        return NULL;
-    }
-    
-    /* Construct default icon name: def_XXX using SNPrintf */
-    SNPrintf(defIconName, sizeof(defIconName), "def_%s", typeIdentifier);
-    
-    /* Copy to output buffer */
-    if (defIconNameOut && defIconNameSize > 0) {
-        SNPrintf(defIconNameOut, defIconNameSize, "%s", defIconName);
-    }
-    
-    /* Get the default icon from ENVARC:Sys/ or ENV:Sys/ */
-    /* Use GetDiskObject directly, same as the diagnostic code */
-    
-    /* Try ENV:Sys first */
-    if ((envDir = Lock("ENV:Sys", SHARED_LOCK)) != NULL) {
-        oldDir = CurrentDir(envDir);
-        defaultIcon = GetDiskObject(defIconName);
-        CurrentDir(oldDir);
-        UnLock(envDir);
-    }
-    
-    /* If not found, try ENVARC:Sys */
-    if (!defaultIcon && (envDir = Lock("ENVARC:Sys", SHARED_LOCK)) != NULL) {
-        oldDir = CurrentDir(envDir);
-        defaultIcon = GetDiskObject(defIconName);
-        CurrentDir(oldDir);
-        UnLock(envDir);
-    }
-    
-    if (defaultIcon) {
-        /* Extract default tool from the icon */
-        /* do_DefaultTool is a STRPTR - check if it's not NULL and not empty */
-        if (defaultIcon->do_DefaultTool != NULL) {
-            /* Check if the string has content (not just a null terminator) */
-            if (defaultIcon->do_DefaultTool[0] != '\0') {
-                /* Copy the default tool string before freeing the DiskObject */
-                UBYTE toolBuffer[256];
-                ULONG toolLen;
-                
-                toolLen = strlen(defaultIcon->do_DefaultTool);
-                /* Pass the full buffer size (256) to Strncpy - it will handle truncation and null-termination */
-                Strncpy(toolBuffer, defaultIcon->do_DefaultTool, 256);
-                
-                /* Allocate memory for the tool name to return */
-                /* We need to allocate this because we're freeing the DiskObject */
-                defaultTool = AllocVec(toolLen + 1, MEMF_CLEAR);
-                if (defaultTool) {
-                    Strncpy((UBYTE *)defaultTool, toolBuffer, toolLen + 1);
-                }
-            }
-        }
-        /* Note: If icon was found but has no default tool, defaultTool will be NULL */
-        
-        FreeDiskObject(defaultIcon);
-    }
-    
-    return defaultTool;
 }
 
 /* Check if a file is a directory */
@@ -607,47 +445,6 @@ BOOL IsLeftAmigaHeld(VOID)
     }
     
     return FALSE;
-}
-
-/* Check if tool name is AppX (to prevent infinite loops) */
-BOOL IsAppX(STRPTR toolName)
-{
-    if (!toolName || !appXName) {
-        return FALSE;
-    }
-    
-    /* Compare tool name with our name (case-insensitive) */
-    /* Stricmp returns 0 if strings match, non-zero otherwise */
-    if (Stricmp(toolName, appXName) == 0) {
-        return TRUE;
-    }
-    return FALSE;
-}
-
-/* Get AppX executable name from WBStartup */
-STRPTR GetAppXName(struct WBStartup *wbs)
-{
-    static UBYTE nameBuffer[256];
-    STRPTR fileName;
-    STRPTR filePart;
-    
-    if (wbs && wbs->sm_ArgList && wbs->sm_ArgList[0].wa_Name) {
-        /* Get the filename from the first argument (which is our tool) */
-        fileName = wbs->sm_ArgList[0].wa_Name;
-        filePart = FilePart(fileName);
-        
-        if (filePart && *filePart) {
-            /* Copy just the filename part (without path) */
-            Strncpy(nameBuffer, filePart, 255);
-            nameBuffer[255] = '\0';
-            return nameBuffer;
-        }
-    }
-    
-    /* Fallback: use static name */
-    Strncpy(nameBuffer, "AppX", 255);
-    nameBuffer[255] = '\0';
-    return nameBuffer;
 }
 
 /* Show error dialog */
@@ -745,22 +542,19 @@ BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName)
     return TRUE;
 }
 
-/* Open file with its default tool */
-BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
+/* Open toolbox drawer - handles directories with TOOLBOX tooltype */
+BOOL OpenToolboxDrawer(STRPTR fileName, BPTR fileLock)
 {
-    STRPTR typeIdentifier = NULL;
-    STRPTR defaultTool = NULL;
     BOOL success = FALSE;
     BOOL confirmed = FALSE;
-    struct TagItem tags[3];
-    UBYTE defIconName[64];
+    struct TagItem tags[1];
     UBYTE errorMsg[512];
     struct DiskObject *projectIcon = NULL;
     STRPTR toolboxValue = NULL;
     UBYTE fullToolPath[512];
     LONG errorCode;
     
-    /* Special case: Check if this is a directory (drawer) */
+    /* Check if this is a directory (drawer) */
     if (IsDirectory(fileName, fileLock)) {
         UBYTE dirPath[512];
         UBYTE fullDirPath[512];
@@ -960,179 +754,13 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
         return TRUE;
     }
     
-    /* Normal case: Regular file, use DefIcons lookup */
-    /* Step 1: Get file type identifier */
-    typeIdentifier = GetFileTypeIdentifier(fileName, fileLock);
-    
-    if (!typeIdentifier || *typeIdentifier == '\0') {
-        /* File type could not be identified */
-        /* DefIcons is running (we checked earlier), so file type is unknown */
-        ShowErrorDialog("AppX", 
-            "\nCould not identify file type.\n\n"
-            "The file type is not recognized by DefIcons.\n"
-            "You may need to add a rule for this file type\n"
-            "in DefIcons preferences.\n");
-        return FALSE;
-    }
-    
-    /* Step 2: Get default tool for this file type */
-    defIconName[0] = '\0';
-    defaultTool = GetDefaultToolFromType(typeIdentifier, defIconName, sizeof(defIconName));
-    
-    if (!defaultTool || *defaultTool == '\0') {
-        /* No default tool found for this file type */
-        /* Try to determine if icon exists and what its default tool actually is */
-        BOOL iconExists = FALSE;
-        UBYTE actualDefaultTool[256];
-        struct DiskObject *testIcon = NULL;
-        BPTR testOldDir = NULL;
-        BPTR testEnvDir = NULL;
-        ULONG toolLen;
-        
-        actualDefaultTool[0] = '\0';
-        
-        /* Check if icon file exists in ENV:Sys and read its default tool */
-        if ((testEnvDir = Lock("ENV:Sys", SHARED_LOCK)) != NULL) {
-            testOldDir = CurrentDir(testEnvDir);
-            testIcon = GetDiskObject(defIconName);
-            if (testIcon) {
-                iconExists = TRUE;
-                /* Check what the default tool actually is */
-                /* Copy the string before freeing the DiskObject */
-                if (testIcon->do_DefaultTool != NULL && testIcon->do_DefaultTool[0] != '\0') {
-                    toolLen = strlen(testIcon->do_DefaultTool);
-                    /* Pass the full buffer size (256) to Strncpy - it will handle truncation and null-termination */
-                    /* Buffer is 256 bytes, so Strncpy can copy up to 255 chars + null terminator */
-                    Strncpy(actualDefaultTool, testIcon->do_DefaultTool, 256);
-                    /* Strncpy automatically null-terminates, even if truncated */
-                }
-                FreeDiskObject(testIcon);
-            }
-            CurrentDir(testOldDir);
-            UnLock(testEnvDir);
-        }
-        
-        /* If not found, check ENVARC:Sys */
-        if (!iconExists && (testEnvDir = Lock("ENVARC:Sys", SHARED_LOCK)) != NULL) {
-            testOldDir = CurrentDir(testEnvDir);
-            testIcon = GetDiskObject(defIconName);
-            if (testIcon) {
-                iconExists = TRUE;
-                /* Check what the default tool actually is */
-                /* Copy the string before freeing the DiskObject */
-                if (testIcon->do_DefaultTool != NULL && testIcon->do_DefaultTool[0] != '\0') {
-                    toolLen = strlen(testIcon->do_DefaultTool);
-                    /* Pass the full buffer size (256) to Strncpy - it will handle truncation and null-termination */
-                    /* Buffer is 256 bytes, so Strncpy can copy up to 255 chars + null terminator */
-                    Strncpy(actualDefaultTool, testIcon->do_DefaultTool, 256);
-                    /* Strncpy automatically null-terminates, even if truncated */
-                }
-                FreeDiskObject(testIcon);
-            }
-            CurrentDir(testOldDir);
-            UnLock(testEnvDir);
-        }
-        
-        /* Build detailed error message */
-        if (iconExists) {
-            if (actualDefaultTool[0] != '\0') {
-                /* Icon exists and has a default tool, but GetDefaultToolFromType didn't find it */
-                /* This suggests a bug in our lookup code */
-                sprintf(errorMsg,
-                    "Default tool lookup failed.\n\n"
-                    "File type: %s\n"
-                    "Default icon: %s.info\n"
-                    "Default tool in icon: %s\n\n"
-                    "The icon exists and has a default tool,\n"
-                    "but AppX could not retrieve it.\n"
-                    "This may be a bug in AppX.",
-                    typeIdentifier,
-                    (STRPTR)(defIconName[0] != '\0' ? (STRPTR)defIconName : (STRPTR)(UBYTE *)"(unknown)"),
-                    actualDefaultTool);
-            } else {
-                /* Icon exists but has no default tool */
-                sprintf(errorMsg,
-                    "No default tool found.\n\n"
-                    "File type: %s\n"
-                    "Default icon: %s.info\n\n"
-                    "The default icon exists but does not have\n"
-                    "a default tool specified.\n\n"
-                    "Please edit the icon and set a default tool.",
-                    typeIdentifier,
-                    (STRPTR)(defIconName[0] != '\0' ? (STRPTR)defIconName : (STRPTR)(UBYTE *)"(unknown)"));
-            }
-        } else {
-            /* Icon does not exist */
-            sprintf(errorMsg,
-                "No default tool found.\n\n"
-                "File type: %s\n"
-                "Default icon: %s.info\n\n"
-                "The default icon does not exist in\n"
-                "ENV:Sys/ or ENVARC:Sys/.\n\n"
-                "You may need to create this icon.",
-                typeIdentifier,
-                (STRPTR)(defIconName[0] != '\0' ? defIconName : "(unknown)"));
-        }
-        ShowErrorDialog("AppX", errorMsg);
-        return FALSE;
-    }
-    
-    /* Step 3: Check for infinite loop - is the default tool AppX? */
-    if (IsAppX(defaultTool)) {
-        /* Prevent infinite loop */
-        if (defaultTool) {
-            FreeVec(defaultTool);
-        }
-        return FALSE;
-    }
-    
-    /* Step 4: Show confirmation dialog */
-    confirmed = ShowConfirmDialog(fileName, defaultTool);
-    if (!confirmed) {
-        /* User cancelled */
-        if (defaultTool) {
-            FreeVec(defaultTool);
-        }
-        return FALSE;
-    }
-    
-    /* Step 5: Open the file using OpenWorkbenchObjectA */
-    /* Build TagItem array for OpenWorkbenchObjectA */
-    tags[0].ti_Tag = WBOPENA_ArgLock;
-    tags[0].ti_Data = (ULONG)fileLock;
-    tags[1].ti_Tag = WBOPENA_ArgName;
-    tags[1].ti_Data = (ULONG)fileName;
-    tags[2].ti_Tag = TAG_DONE;
-    
-    /* Clear any previous error */
-    SetIoErr(0);
-    
-    success = OpenWorkbenchObjectA(defaultTool, tags);
-    
-    /* Check IoErr() regardless of return value, as OpenWorkbenchObjectA may return TRUE even on failure */
-    errorCode = IoErr();
-    
-    if (!success || errorCode != 0) {
-        /* OpenWorkbenchObjectA failed - show error code */
-        UBYTE errorMsg[512];
-        
-        SNPrintf(errorMsg, sizeof(errorMsg),
-            "Failed to launch tool.\n\n"
-            "Tool: %s\n"
-            "File: %s\n\n"
-            "Error code: %ld\n\n"
-            "The tool could not be launched.\n"
-            "Please check that the tool exists",
-            defaultTool, fileName, errorCode);
-        ShowErrorDialog("AppX", errorMsg);
-    }
-    
-    /* Free the allocated default tool string */
-    if (defaultTool) {
-        FreeVec(defaultTool);
-    }
-    
-    return success;
+    /* Not a directory - show error */
+    ShowErrorDialog("AppX",
+        "\nNot a directory.\n\n"
+        "AppX only works with toolbox drawer icons.\n"
+        "Please set AppX as the default tool on a drawer icon\n"
+        "with a TOOLBOX tooltype.\n");
+    return FALSE;
 }
 
 /* Handle drawer opening mode (CLI mode) */

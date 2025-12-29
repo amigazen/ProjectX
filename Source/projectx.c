@@ -29,7 +29,7 @@
 #include <proto/graphics.h>
 #include <string.h>
 #include <stdlib.h>
-#include <stdio.h>
+#include <stdarg.h>
 
 /* Library base pointers */
 extern struct ExecBase *SysBase;
@@ -45,13 +45,16 @@ struct ClassLibrary *RequesterBase = NULL;
 /* Reaction class handles */
 Class *RequesterClass = NULL;
 
+/* Log file handle */
+static BPTR logFile = NULL;
+
 /* Forward declarations */
+VOID LogMessage(STRPTR format, ...);
 BOOL InitializeLibraries(VOID);
 BOOL InitializeApplication(VOID);
 VOID Cleanup(VOID);
 BOOL IsDefIconsRunning(VOID);
 VOID ShowErrorDialog(STRPTR title, STRPTR message);
-BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName);
 BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock);
 STRPTR GetFileTypeIdentifier(STRPTR fileName, BPTR fileLock);
 STRPTR GetDefaultToolFromType(STRPTR typeIdentifier, STRPTR defIconNameOut, ULONG defIconNameSize);
@@ -78,29 +81,37 @@ int main(int argc, char *argv[])
     
     if (!fromWorkbench) {
         /* CLI mode - not supported yet */
-        PutStr("ProjectX must be started from Workbench\n");
+        /* LogMessage("ProjectX: CLI mode not supported, must be started from Workbench\n"); */
         return RETURN_FAIL;
     }
     
     /* Get WBStartup message */
     wbs = (struct WBStartup *)argv;
     
+    /* LogMessage("ProjectX: Starting, argc=%ld\n", argc); */
+    
     /* Initialize libraries */
     if (!InitializeLibraries()) {
+        /* LogMessage("ProjectX: InitializeLibraries failed\n"); */
         return RETURN_FAIL;
     }
     
     /* Initialize application (requester.class) */
     if (!InitializeApplication()) {
+        /* LogMessage("ProjectX: InitializeApplication failed\n"); */
         Cleanup();
         return RETURN_FAIL;
     }
     
+    /* LogMessage("ProjectX: Application initialized\n"); */
+    
     /* Get our own name for loop detection */
     projectXName = GetProjectXName(wbs);
+    /* LogMessage("ProjectX: Our name is %s\n", projectXName); */
     
     /* Check if DefIcons is running */
     if (!IsDefIconsRunning()) {
+        /* LogMessage("ProjectX: DefIcons is not running\n"); */
         ShowErrorDialog("ProjectX", 
             "DefIcons is not running.\n\n"
             "ProjectX requires DefIcons to identify file types.\n"
@@ -109,25 +120,35 @@ int main(int argc, char *argv[])
         return RETURN_FAIL;
     }
     
+    /* LogMessage("ProjectX: DefIcons is running\n"); */
+    
     /* Check if we have any file arguments */
     if (wbs->sm_NumArgs <= 1) {
+        /* LogMessage("ProjectX: No file arguments\n"); */
         /* No files to process - show error */
         ShowErrorDialog("ProjectX", "No file specified.\n\nProjectX must be set as the default tool on a project icon.");
         Cleanup();
         return RETURN_FAIL;
     }
     
+    /* LogMessage("ProjectX: Processing %ld file arguments\n", wbs->sm_NumArgs - 1); */
+    
     /* Process each file argument (skip index 0 which is our tool) */
     for (i = 1, wbarg = &wbs->sm_ArgList[i]; i < wbs->sm_NumArgs; i++, wbarg++) {
         BPTR oldDir = NULL;
         
         if (wbarg->wa_Lock && wbarg->wa_Name && *wbarg->wa_Name) {
+            /* LogMessage("ProjectX: Processing file %ld: %s\n", i, wbarg->wa_Name); */
+            
             /* Change to the file's directory */
             oldDir = CurrentDir(wbarg->wa_Lock);
             
             /* Open the file with its default tool */
             if (!OpenFileWithDefaultTool(wbarg->wa_Name, wbarg->wa_Lock)) {
+                /* LogMessage("ProjectX: OpenFileWithDefaultTool failed for %s\n", wbarg->wa_Name); */
                 success = FALSE;
+            } else {
+                /* LogMessage("ProjectX: OpenFileWithDefaultTool succeeded for %s\n", wbarg->wa_Name); */
             }
             
             /* Restore original directory */
@@ -136,6 +157,8 @@ int main(int argc, char *argv[])
             }
         }
     }
+    
+    /* LogMessage("ProjectX: Finished processing files, success=%ld\n", success); */
     
     /* Cleanup */
     Cleanup();
@@ -149,21 +172,18 @@ BOOL InitializeLibraries(VOID)
     /* Open intuition.library */
     IntuitionBase = (struct IntuitionBase *)OpenLibrary("intuition.library", 47L);
     if (IntuitionBase == NULL) {
-        PutStr("ProjectX: Failed to open intuition.library\n");
         return FALSE;
     }
     
     /* Open utility.library */
     UtilityBase = OpenLibrary("utility.library", 47L);
     if (UtilityBase == NULL) {
-        PutStr("ProjectX: Failed to open utility.library\n");
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
         return FALSE;
     }
     
     if (!(IconBase = OpenLibrary("icon.library", 47L))) {
-        PutStr("ProjectX: Failed to open icon.library (version 47 or higher required)\n");
         CloseLibrary(UtilityBase);
         UtilityBase = NULL;
         CloseLibrary((struct Library *)IntuitionBase);
@@ -172,7 +192,6 @@ BOOL InitializeLibraries(VOID)
     }
     
     if (!(WorkbenchBase = OpenLibrary("workbench.library", 44L))) {
-        PutStr("ProjectX: Failed to open workbench.library\n");
         CloseLibrary(IconBase);
         IconBase = NULL;
         CloseLibrary(UtilityBase);
@@ -181,6 +200,18 @@ BOOL InitializeLibraries(VOID)
         IntuitionBase = NULL;
         return FALSE;
     }
+    
+    /* Open log file */
+    /* logFile = Open("codecraft:projectx.log", MODE_NEWFILE); */
+    /* if (logFile == NULL) { */
+    /*     Try to open existing file for append */
+    /*     logFile = Open("codecraft:projectx.log", MODE_READWRITE); */
+    /*     if (logFile != NULL) { */
+    /*         Seek(logFile, 0, OFFSET_END); */
+    /*     } */
+    /* } */
+    
+    /* LogMessage("ProjectX: Libraries initialized\n"); */
     
     return TRUE;
 }
@@ -205,9 +236,32 @@ BOOL InitializeApplication(VOID)
     return TRUE;
 }
 
+/* Log message to file */
+VOID LogMessage(STRPTR format, ...)
+{
+    UBYTE buffer[512];
+    LONG result;
+    va_list args;
+    
+    if (logFile == NULL || UtilityBase == NULL) {
+        return;
+    }
+    
+    va_start(args, format);
+    result = VSNPrintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    
+    if (result > 0 && result < sizeof(buffer)) {
+        Write(logFile, buffer, result);
+        Flush(logFile);
+    }
+}
+
 /* Cleanup libraries */
 VOID Cleanup(VOID)
 {
+    /* LogMessage("ProjectX: Cleanup starting\n"); */
+    
     if (RequesterClass != NULL) {
         RequesterClass = NULL;
     }
@@ -236,6 +290,11 @@ VOID Cleanup(VOID)
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
     }
+    
+    /* if (logFile != NULL) { */
+    /*     Close(logFile); */
+    /*     logFile = NULL; */
+    /* } */
 }
 
 /* Check if DefIcons is running by looking for its message port */
@@ -307,8 +366,6 @@ STRPTR GetFileTypeIdentifier(STRPTR fileName, BPTR fileLock)
 /* defIconNameOut will contain the name of the def_ icon that was tried */
 STRPTR GetDefaultToolFromType(STRPTR typeIdentifier, STRPTR defIconNameOut, ULONG defIconNameSize)
 {
-    struct TagItem tags[4];
-    LONG errorCode = 0;
     struct DiskObject *defaultIcon = NULL;
     STRPTR defaultTool = NULL;
     UBYTE defIconName[64];
@@ -426,10 +483,8 @@ VOID ShowErrorDialog(STRPTR title, STRPTR message)
     Object *reqobj;
     
     if (RequesterClass == NULL) {
-        /* Requester class not available - use PutStr as fallback */
-        PutStr("ProjectX Error: ");
-        PutStr(message);
-        PutStr("\n");
+        /* Requester class not available - log error */
+        /* LogMessage("ProjectX Error: %s\n", message); */
         return;
     }
     
@@ -452,56 +507,83 @@ VOID ShowErrorDialog(STRPTR title, STRPTR message)
 }
 
 /* Show confirmation dialog before launching tool */
-BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName)
-{
-    Object *reqobj;
-    char title[256];
-    char message[512];
-    ULONG result;
-    
-    if (RequesterClass == NULL) {
-        /* Requester class not available - default to yes */
-        return TRUE;
-    }
-    
-    /* Format the title and message */
-    Strncpy(title, "ProjectX", 255);
-    title[255] = '\0';
-    
-    sprintf(message,
-            "\n\n"
-            "File: %s\n\n"
-            "Tool: %s\n\n"
-            "Launch this tool?\n\n",
-            fileName, toolName);
-    
-    /* Create the requester object with confirmation type */
-    reqobj = NewObject(RequesterClass, NULL,
-                       REQ_TitleText, title,
-                       REQ_BodyText, message,
-                       REQ_Type, REQTYPE_INFO,
-                       REQ_GadgetText, "Yes|No",
-                       REQ_Image, REQIMAGE_QUESTION,
-                       TAG_END);
-    
-    if (reqobj != NULL) {
-        /* Show the requester and wait for user response */
-        /* RM_OPENREQ returns button number: 1 = first button (Yes), 2 = second button (No) */
-        result = DoMethod(reqobj, RM_OPENREQ, NULL, 0L, NULL, TAG_DONE);
-        
-        /* Clean up the requester object */
-        DisposeObject(reqobj);
-        
-        /* Return TRUE if user clicked "Yes" (first button, result == 1) */
-        if (result == 1) {
-            return TRUE;
-        }
-        return FALSE;
-    }
-    
-    /* If requester creation failed, default to yes */
-    return TRUE;
-}
+/* BOOL ShowConfirmDialog(STRPTR fileName, STRPTR toolName) */
+/* { */
+/*     Object *reqobj; */
+/*     char title[256]; */
+/*     char message[512]; */
+/*     ULONG result; */
+/*      */
+/*     if (RequesterClass == NULL) { */
+/*         Requester class not available - default to yes */
+/*         return TRUE; */
+/*     } */
+/*      */
+/*     Format the title and message */
+/*     Strncpy(title, "ProjectX", 255); */
+/*     title[255] = '\0'; */
+/*      */
+/*     SNPrintf(message, sizeof(message), */
+/*             "\n\n" */
+/*             "File: %s\n\n" */
+/*             "Tool: %s\n\n" */
+/*             "Launch this tool?\n\n", */
+/*             fileName, toolName); */
+/*      */
+/*     LogMessage("ProjectX: About to create requester object\n"); */
+/*     Flush(logFile); */
+/*      */
+/*     Create the requester object with confirmation type */
+/*     reqobj = NewObject(RequesterClass, NULL, */
+/*                        REQ_TitleText, title, */
+/*                        REQ_BodyText, message, */
+/*                        REQ_Type, REQTYPE_INFO, */
+/*                        REQ_GadgetText, "Yes|No", */
+/*                        REQ_Image, REQIMAGE_QUESTION, */
+/*                        TAG_END); */
+/*      */
+/*     LogMessage("ProjectX: NewObject returned reqobj=%p\n", reqobj); */
+/*     Flush(logFile); */
+/*      */
+/*     if (reqobj != NULL) { */
+/*         LogMessage("ProjectX: Showing confirmation dialog for file=%s tool=%s\n", fileName, toolName); */
+/*         LogMessage("ProjectX: About to call DoMethod(RM_OPENREQ)...\n"); */
+/*         Flush(logFile); */
+/*          */
+/*         Show the requester and wait for user response */
+/*         RM_OPENREQ returns button number: 1 = first button (Yes), 2 = second button (No) */
+/*         result = DoMethod(reqobj, RM_OPENREQ, NULL, 0L, NULL, TAG_DONE); */
+/*          */
+/*         LogMessage("ProjectX: DoMethod(RM_OPENREQ) returned, result=%ld\n", result); */
+/*         Flush(logFile); */
+/*          */
+/*         Clean up the requester object BEFORE checking result */
+/*         This ensures the requester is closed before we proceed */
+/*         LogMessage("ProjectX: About to dispose requester object\n"); */
+/*         DisposeObject(reqobj); */
+/*         reqobj = NULL; */
+/*          */
+/*         LogMessage("ProjectX: Requester object disposed\n"); */
+/*         Flush(logFile); */
+/*          */
+/*         Return TRUE only if user clicked "Yes" (first button, result == 1) */
+/*         Result values: 1 = first button (Yes), 2 = second button (No), 0 = cancelled/error */
+/*         if (result == 1) { */
+/*             LogMessage("ProjectX: User confirmed (result=%ld), proceeding to launch tool\n", result); */
+/*             Flush(logFile); */
+/*             return TRUE; */
+/*         } */
+/*         Result 0, 2, or higher means No, cancelled, or error */
+/*         LogMessage("ProjectX: User cancelled or error (result=%ld), NOT launching tool\n", result); */
+/*         Flush(logFile); */
+/*         return FALSE; */
+/*     } */
+/*      */
+/*     If requester creation failed, default to NO (don't launch) */
+/*     LogMessage("ProjectX: Requester creation failed, defaulting to NO\n"); */
+/*     Flush(logFile); */
+/*     return FALSE; */
+/* } */
 
 /* Open file with its default tool */
 BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
@@ -509,13 +591,16 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
     STRPTR typeIdentifier = NULL;
     STRPTR defaultTool = NULL;
     BOOL success = FALSE;
-    BOOL confirmed = FALSE;
     struct TagItem tags[4];
     UBYTE defIconName[64];
     UBYTE errorMsg[512];
+    LONG errorCode;
+    
+    /* LogMessage("ProjectX: OpenFileWithDefaultTool called for file=%s\n", fileName); */
     
     /* Step 1: Get file type identifier */
     typeIdentifier = GetFileTypeIdentifier(fileName, fileLock);
+    /* LogMessage("ProjectX: File type identifier=%s\n", typeIdentifier ? typeIdentifier : (STRPTR)"(null)"); */
     
     if (!typeIdentifier || *typeIdentifier == '\0') {
         /* File type could not be identified */
@@ -531,6 +616,7 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
     /* Step 2: Get default tool for this file type */
     defIconName[0] = '\0';
     defaultTool = GetDefaultToolFromType(typeIdentifier, defIconName, sizeof(defIconName));
+    /* LogMessage("ProjectX: Default tool=%s defIconName=%s\n", defaultTool ? defaultTool : (STRPTR)"(null)", defIconName); */
     
     if (!defaultTool || *defaultTool == '\0') {
         /* No default tool found for this file type */
@@ -591,7 +677,7 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
             if (actualDefaultTool[0] != '\0') {
                 /* Icon exists and has a default tool, but GetDefaultToolFromType didn't find it */
                 /* This suggests a bug in our lookup code */
-                sprintf(errorMsg,
+                SNPrintf(errorMsg, sizeof(errorMsg),
                     "Default tool lookup failed.\n\n"
                     "File type: %s\n"
                     "Default icon: %s.info\n"
@@ -600,11 +686,11 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
                     "but ProjectX could not retrieve it.\n"
                     "This may be a bug in ProjectX.",
                     typeIdentifier,
-                    defIconName[0] != '\0' ? (STRPTR)defIconName : "(unknown)",
+                    defIconName[0] != '\0' ? (STRPTR)defIconName : (STRPTR)"(unknown)",
                     actualDefaultTool);
             } else {
                 /* Icon exists but has no default tool */
-                sprintf(errorMsg,
+                SNPrintf(errorMsg, sizeof(errorMsg),
                     "No default tool found.\n\n"
                     "File type: %s\n"
                     "Default icon: %s.info\n\n"
@@ -612,11 +698,11 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
                     "a default tool specified.\n\n"
                     "Please edit the icon and set a default tool.",
                     typeIdentifier,
-                    defIconName[0] != '\0' ? (STRPTR)defIconName : "(unknown)");
+                    defIconName[0] != '\0' ? (STRPTR)defIconName : (STRPTR)"(unknown)");
             }
         } else {
             /* Icon does not exist */
-            sprintf(errorMsg,
+            SNPrintf(errorMsg, sizeof(errorMsg),
                 "No default tool found.\n\n"
                 "File type: %s\n"
                 "Default icon: %s.info\n\n"
@@ -624,7 +710,7 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
                 "ENV:Sys/ or ENVARC:Sys/.\n\n"
                 "You may need to create this icon.",
                 typeIdentifier,
-                defIconName[0] != '\0' ? (STRPTR)defIconName : "(unknown)");
+                defIconName[0] != '\0' ? (STRPTR)defIconName : (STRPTR)"(unknown)");
         }
         ShowErrorDialog("ProjectX", errorMsg);
         return FALSE;
@@ -632,6 +718,7 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
     
     /* Step 3: Check for infinite loop - is the default tool ProjectX? */
     if (IsProjectX(defaultTool)) {
+        /* LogMessage("ProjectX: Infinite loop detected, default tool is ProjectX\n"); */
         /* Prevent infinite loop */
         if (defaultTool) {
             FreeVec(defaultTool);
@@ -639,17 +726,11 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
         return FALSE;
     }
     
-    /* Step 4: Show confirmation dialog */
-    confirmed = ShowConfirmDialog(fileName, defaultTool);
-    if (!confirmed) {
-        /* User cancelled */
-        if (defaultTool) {
-            FreeVec(defaultTool);
-        }
-        return FALSE;
-    }
+    /* LogMessage("ProjectX: No infinite loop, proceeding to launch tool\n"); */
     
-    /* Step 5: Open the file using OpenWorkbenchObjectA */
+    /* Step 4: Open the file using OpenWorkbenchObjectA (no confirmation dialog) */
+    /* LogMessage("ProjectX: About to call OpenWorkbenchObjectA tool=%s file=%s\n", defaultTool, fileName); */
+    
     /* Build TagItem array for OpenWorkbenchObjectA */
     tags[0].ti_Tag = WBOPENA_ArgLock;
     tags[0].ti_Data = (ULONG)fileLock;
@@ -657,7 +738,40 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
     tags[1].ti_Data = (ULONG)fileName;
     tags[2].ti_Tag = TAG_DONE;
     
+    /* Clear any previous error */
+    SetIoErr(0);
+    
+    /* LogMessage("ProjectX: Calling OpenWorkbenchObjectA...\n"); */
     success = OpenWorkbenchObjectA(defaultTool, tags);
+    /* LogMessage("ProjectX: OpenWorkbenchObjectA returned success=%ld\n", success); */
+    
+    /* Check IoErr() regardless of return value, as OpenWorkbenchObjectA may return TRUE even on failure */
+    errorCode = IoErr();
+    /* LogMessage("ProjectX: IoErr() returned errorCode=%ld\n", errorCode); */
+    
+    if (!success || errorCode != 0) {
+        /* OpenWorkbenchObjectA failed - show error code */
+        /* LogMessage("ProjectX: OpenWorkbenchObjectA failed success=%ld errorCode=%ld\n", success, errorCode); */
+        SNPrintf(errorMsg, sizeof(errorMsg),
+            "Failed to launch tool.\n\n"
+            "Tool: %s\n"
+            "File: %s\n\n"
+            "Error code: %ld\n\n"
+            "The tool could not be launched.\n"
+            "Please check that the tool exists.",
+            defaultTool ? defaultTool : (STRPTR)"(null)",
+            fileName ? fileName : (STRPTR)"(null)",
+            errorCode);
+        ShowErrorDialog("ProjectX", errorMsg);
+        
+        /* Free the allocated default tool string */
+        if (defaultTool) {
+            FreeVec(defaultTool);
+        }
+        return FALSE;
+    }
+    
+    /* LogMessage("ProjectX: Tool launched successfully\n"); */
     
     /* Free the allocated default tool string */
     if (defaultTool) {

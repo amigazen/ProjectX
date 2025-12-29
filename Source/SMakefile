@@ -1,29 +1,36 @@
-# SMakefile for ProjectX - Universal File Opener
+# SMakefile for ProjectX and AppX
 # 
 # ProjectX opens project files using their default tools from DefIcons
 # or system default icons, bypassing hardcoded default tools in .info files
 #
 
-# Program name
+# Program names
 PROGRAM = ProjectX
+APPX_PROGRAM = AppX
 
 # Source files
 SRCS = projectx.c
+APPX_SRCS = appx.c
 
 # Object files
 OBJS = projectx.o
+APPX_OBJS = appx.o
 
 # Compiler and linker
 CC = sc
 LINK = slink
 
 # Default target
-all: $(PROGRAM)
+all: $(PROGRAM) $(APPX_PROGRAM)
 
 # Create the ProjectX executable
-# Use cback.o for detachable process support (allows spawning independent processes)
 $(PROGRAM): $(OBJS)
-	$(LINK) FROM sc:lib/cback.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB lib:small.lib sc:lib/sc.lib BATCH
+	$(LINK) FROM sc:lib/c.o $(OBJS) TO $(PROGRAM) STRIPDEBUG NODEBUG LIB lib:small.lib sc:lib/sc.lib BATCH
+
+# Create the AppX executable
+# Use cback.o for detachable process support (allows spawning independent processes)
+$(APPX_PROGRAM): $(APPX_OBJS)
+	$(LINK) FROM sc:lib/cback.o $(APPX_OBJS) TO $(APPX_PROGRAM) STRIPDEBUG NODEBUG LIB lib:small.lib sc:lib/sc.lib BATCH
 
 # Compile the source files
 .c.o:
@@ -33,15 +40,22 @@ $(PROGRAM): $(OBJS)
 projectx.o: projectx.c
 	$(CC) projectx.c OBJNAME=projectx.o IDIR=include:
 
+# Compile AppX files
+appx.o: appx.c
+	$(CC) appx.c OBJNAME=appx.o IDIR=include:
+
 # Clean target
 clean:
-	Delete $(OBJS) $(PROGRAM) projectx.o
+	Delete $(OBJS) $(APPX_OBJS) $(PROGRAM) $(APPX_PROGRAM) projectx.o appx.o
 
 # Install target
 install:
 	@echo "Installing ProjectX to SDK/C/ProjectX..."
 	@copy $(PROGRAM) to /SDK/C/$(PROGRAM) CLONE
+	@echo "Installing AppX to SDK/C/AppX..."
+	@copy $(APPX_PROGRAM) to /SDK/C/$(APPX_PROGRAM) CLONE
 
 # Dependencies
 projectx.o: projectx.c
+appx.o: appx.c
 
