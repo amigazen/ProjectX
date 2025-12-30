@@ -726,32 +726,82 @@ BOOL OpenToolboxDrawer(STRPTR fileName, BPTR fileLock)
         }
         
         /* User clicked Yes - launch the tool */
-        /* Launch the tool without any arguments */
-        tags[0].ti_Tag = TAG_DONE;
-        
-        /* Clear any previous error */
-        SetIoErr(0);
-        
-        success = OpenWorkbenchObjectA(fullToolPath, tags);
-        
-        /* Check IoErr() regardless of return value, as OpenWorkbenchObjectA may return TRUE even on failure */
-        errorCode = IoErr();
-        
-        if (!success || errorCode != 0) {
-            /* OpenWorkbenchObjectA failed - show error code */
-            UBYTE errorMsg[512];
+        /* Check if the tool is a shell script (has FIBF_SCRIPT protection bit) */
+        {
+            BPTR toolCheckLock = NULL;
+            struct FileInfoBlock *fib = NULL;
+            BOOL isScript = FALSE;
             
-            SNPrintf(errorMsg, sizeof(errorMsg),
-                "\nFailed to launch %s\n\n"
-                "Error code: %ld\n\n"
-                "Please check that the Tool exists.\n",
-                fullToolPath, errorCode);
-            ShowErrorDialog("AppX", errorMsg);
-            return FALSE;
+            /* Lock the tool to examine it */
+            toolCheckLock = Lock((UBYTE *)fullToolPath, SHARED_LOCK);
+            if (toolCheckLock != NULL) {
+                fib = (struct FileInfoBlock *)AllocDosObject(DOS_FIB, NULL);
+                if (fib != NULL) {
+                    if (Examine(toolCheckLock, fib)) {
+                        /* Check if FIBF_SCRIPT bit is set */
+                        if (fib->fib_Protection & FIBF_SCRIPT) {
+                            isScript = TRUE;
+                        }
+                    }
+                    FreeDosObject(DOS_FIB, fib);
+                }
+                UnLock(toolCheckLock);
+            }
+            
+            if (isScript) {
+                /* Tool is a shell script - use SystemTagList() to execute it */
+                struct TagItem sysTags[2];
+                LONG sysResult;
+                
+                /* Build command: just the tool path (shell will handle script execution) */
+                sysTags[0].ti_Tag = SYS_Asynch;
+                sysTags[0].ti_Data = (ULONG)TRUE;
+                sysTags[1].ti_Tag = TAG_DONE;
+                
+                SetIoErr(0);
+                sysResult = SystemTagList(fullToolPath, sysTags);
+                errorCode = IoErr();
+                
+                if (sysResult == -1 || errorCode != 0) {
+                    /* SystemTagList failed - show error */
+                    SNPrintf(errorMsg, sizeof(errorMsg),
+                        "\nFailed to launch script %s\n\n"
+                        "Error code: %ld\n\n"
+                        "Please check that the script exists and is executable.\n",
+                        fullToolPath, errorCode);
+                    ShowErrorDialog("AppX", errorMsg);
+                    return FALSE;
+                }
+                
+                /* Success - script was launched */
+                return TRUE;
+            } else {
+                /* Tool is not a script - use OpenWorkbenchObjectA() */
+                tags[0].ti_Tag = TAG_DONE;
+                
+                /* Clear any previous error */
+                SetIoErr(0);
+                
+                success = OpenWorkbenchObjectA(fullToolPath, tags);
+                
+                /* Check IoErr() regardless of return value, as OpenWorkbenchObjectA may return TRUE even on failure */
+                errorCode = IoErr();
+                
+                if (!success || errorCode != 0) {
+                    /* OpenWorkbenchObjectA failed - show error code */
+                    SNPrintf(errorMsg, sizeof(errorMsg),
+                        "\nFailed to launch %s\n\n"
+                        "Error code: %ld\n\n"
+                        "Please check that the Tool exists.\n",
+                        fullToolPath, errorCode);
+                    ShowErrorDialog("AppX", errorMsg);
+                    return FALSE;
+                }
+                
+                /* Success - tool was launched */
+                return TRUE;
+            }
         }
-        
-        /* Success - tool was launched */
-        return TRUE;
     }
     
     /* Not a directory - show error */

@@ -1,0 +1,24 @@
+; AmigaShell script to detect CPU type and handle accordingly
+SET cputype=`CPU CPUTYPE`
+IF "$cputype" EQ "68000"
+; Handle 68000 CPU
+REQUESTCHOICE TITLE=AppX BODY="This target will run the 68000 variant" GADGETS=OK
+ENDIF
+IF "$cputype" EQ "68010"
+; Handle 68010 CPU
+REQUESTCHOICE TITLE=AppX BODY="This target will run the 68010 variant" GADGETS=OK
+ENDIF
+IF "$cputype" EQ "68020"
+; Handle 68020 CPU
+REQUESTCHOICE TITLE=AppX BODY="This target will run the 68020 variant" GADGETS=OK
+ENDIF
+IF "$cputype" EQ "68030"
+; Handle 68030 CPU
+REQUESTCHOICE TITLE=AppX BODY="This target will run the 68030 variant" GADGETS=OK
+ENDIF
+IF "$cputype" EQ "68040"
+; Handle 68040 CPU
+REQUESTCHOICE TITLE=AppX BODY="This target will run the 68040 variant" GADGETS=OK
+ENDIF
+
+
