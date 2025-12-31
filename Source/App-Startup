@@ -1,3 +1,4 @@
+CD AWebAppX
 ; AmigaShell script to detect CPU type and handle accordingly
 SET cputype=`CPU CPUTYPE`
 IF "$cputype" EQ "68000"
@@ -19,7 +20,7 @@ ENDIF
 IF "$cputype" EQ "68040"
 ; Handle 68040 CPU
 REQUESTCHOICE TITLE=AppX BODY="`cd`" GADGETS=OK
-WBLoad AWebAppX/AWeb040 
+WBLoad AWeb040 
 ENDIF
 
 
