@@ -10,7 +10,7 @@ REQUESTCHOICE TITLE=AppX BODY="This target will run the 68010 variant" GADGETS=O
 ENDIF
 IF "$cputype" EQ "68020"
 ; Handle 68020 CPU
-REQUESTCHOICE TITLE=AppX BODY="This target will run the 68020 variant" GADGETS=OK
+WBLoad AWeb020 &
 ENDIF
 IF "$cputype" EQ "68030"
 ; Handle 68030 CPU
@@ -18,7 +18,8 @@ REQUESTCHOICE TITLE=AppX BODY="This target will run the 68030 variant" GADGETS=O
 ENDIF
 IF "$cputype" EQ "68040"
 ; Handle 68040 CPU
-REQUESTCHOICE TITLE=AppX BODY="This target will run the 68040 variant" GADGETS=OK
+REQUESTCHOICE TITLE=AppX BODY="`cd`" GADGETS=OK
+WBLoad AWebAppX/AWeb040 
 ENDIF
 
 
