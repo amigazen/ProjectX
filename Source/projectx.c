@@ -27,6 +27,11 @@
 #include <proto/requester.h>
 #include <proto/utility.h>
 #include <proto/graphics.h>
+#include <proto/input.h>
+#include <devices/input.h>
+#include <devices/inputevent.h>
+#include <dos/rdargs.h>
+#include <dos/dostags.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -38,6 +43,9 @@ extern struct IntuitionBase *IntuitionBase;
 extern struct Library *IconBase;
 extern struct Library *WorkbenchBase;
 extern struct Library *UtilityBase;
+struct MsgPort *InputPort = NULL;
+struct IOStdReq *InputIO = NULL;
+struct Library *InputBase = NULL;
 
 /* Reaction class library bases */
 struct ClassLibrary *RequesterBase = NULL;
@@ -60,9 +68,11 @@ STRPTR GetFileTypeIdentifier(STRPTR fileName, BPTR fileLock);
 STRPTR GetDefaultToolFromType(STRPTR typeIdentifier, STRPTR defIconNameOut, ULONG defIconNameSize);
 BOOL IsProjectX(STRPTR toolName);
 STRPTR GetProjectXName(struct WBStartup *wbs);
+BOOL IsLeftShiftHeld(VOID);
 
-static const char *verstag = "$VER: ProjectX 47.1 (21.12.2025)\n";
+static const char *verstag = "$VER: ProjectX 47.2 (1.1.2026)\n";
 static const char *stack_cookie = "$STACK: 4096\n";
+const long oslibversion = 47L;
 
 /* Application variables */
 static STRPTR projectXName = NULL;
@@ -80,9 +90,163 @@ int main(int argc, char *argv[])
     fromWorkbench = (argc == 0);
     
     if (!fromWorkbench) {
-        /* CLI mode - not supported yet */
-        /* LogMessage("ProjectX: CLI mode not supported, must be started from Workbench\n"); */
-        return RETURN_FAIL;
+        /* CLI mode - parse arguments and handle file */
+        struct RDArgs *rdargs;
+        STRPTR fileName = NULL;
+        LONG openFlag = 0; /* OPEN/S - boolean switch */
+        LONG args[2] = {0, 0}; /* FILE/A, OPEN/S */
+        CONST_STRPTR template = "FILE/A,OPEN/S";
+        LONG errorCode;
+        STRPTR typeIdentifier = NULL;
+        STRPTR defaultTool = NULL;
+        UBYTE defIconName[64];
+        BPTR fileLock = NULL;
+        BPTR oldDir = NULL;
+        BOOL success = FALSE;
+        struct TagItem tags[3];
+        
+        /* Initialize libraries first (needed for ReadArgs and file operations) */
+        if (!InitializeLibraries()) {
+            return RETURN_FAIL;
+        }
+        
+        /* Check if DefIcons is running */
+        if (!IsDefIconsRunning()) {
+            PutStr("ProjectX: DefIcons is not running.\n");
+            PutStr("ProjectX requires DefIcons to identify file types.\n");
+            Cleanup();
+            return RETURN_FAIL;
+        }
+        
+        SetIoErr(0);
+        rdargs = ReadArgs(template, (LONG *)args, NULL);
+        errorCode = IoErr();
+        
+        if (rdargs == NULL || errorCode != 0) {
+            /* ReadArgs failed - show usage */
+            PutStr("Usage: ProjectX FILE/A [OPEN/S]\n");
+            PutStr("  FILE/A  - File to get default tool for\n");
+            PutStr("  OPEN/S - If set, immediately launch the tool with the file\n");
+            PutStr("           If not set, print the default tool name\n");
+            if (rdargs != NULL) {
+                FreeArgs(rdargs);
+            }
+            Cleanup();
+            return RETURN_FAIL;
+        }
+        
+        fileName = (STRPTR)args[0];
+        openFlag = args[1]; /* OPEN/S - 1 if set, 0 if not */
+        
+        if (fileName == NULL || *fileName == '\0') {
+            PutStr("ProjectX: No file specified.\n");
+            FreeArgs(rdargs);
+            Cleanup();
+            return RETURN_FAIL;
+        }
+        
+        /* Lock the file to get its directory */
+        fileLock = Lock((UBYTE *)fileName, SHARED_LOCK);
+        if (fileLock == NULL) {
+            PutStr("ProjectX: Could not lock file.\n");
+            FreeArgs(rdargs);
+            Cleanup();
+            return RETURN_FAIL;
+        }
+        
+        /* Get the file's directory lock and filename part */
+        {
+            BPTR parentLock;
+            STRPTR filePartPtr;
+            
+            /* Get just the filename part */
+            filePartPtr = FilePart(fileName);
+            
+            /* Get parent directory lock */
+            parentLock = ParentDir(fileLock);
+            UnLock(fileLock);
+            
+            if (parentLock == NULL) {
+                PutStr("ProjectX: Could not get parent directory.\n");
+                FreeArgs(rdargs);
+                Cleanup();
+                return RETURN_FAIL;
+            }
+            
+            fileLock = parentLock;
+            oldDir = CurrentDir(fileLock);
+            
+            /* Get file type identifier using filename and directory lock */
+            typeIdentifier = GetFileTypeIdentifier(filePartPtr, fileLock);
+            
+            if (!typeIdentifier || *typeIdentifier == '\0') {
+                PutStr("ProjectX: Could not identify file type.\n");
+                if (oldDir != NULL) {
+                    CurrentDir(oldDir);
+                }
+                UnLock(fileLock);
+                FreeArgs(rdargs);
+                Cleanup();
+                return RETURN_FAIL;
+            }
+            
+            /* Get default tool from deficon */
+            defIconName[0] = '\0';
+            defaultTool = GetDefaultToolFromType(typeIdentifier, defIconName, sizeof(defIconName));
+            
+            if (!defaultTool || *defaultTool == '\0') {
+                PutStr("ProjectX: No default tool found for this file type.\n");
+                if (oldDir != NULL) {
+                    CurrentDir(oldDir);
+                }
+                UnLock(fileLock);
+                FreeArgs(rdargs);
+                Cleanup();
+                return RETURN_FAIL;
+            }
+            
+            if (openFlag == 0) {
+                /* OPEN/S not set - just print the default tool name */
+                PutStr(defaultTool);
+                PutStr("\n");
+                success = TRUE;
+            } else {
+                /* OPEN/S set - launch the tool with the file */
+                /* Build TagItem array for OpenWorkbenchObjectA */
+                tags[0].ti_Tag = WBOPENA_ArgLock;
+                tags[0].ti_Data = (ULONG)fileLock;
+                tags[1].ti_Tag = WBOPENA_ArgName;
+                tags[1].ti_Data = (ULONG)filePartPtr;
+                tags[2].ti_Tag = TAG_DONE;
+                
+                /* Clear any previous error */
+                SetIoErr(0);
+                
+                success = OpenWorkbenchObjectA(defaultTool, tags);
+                errorCode = IoErr();
+                
+                if (!success || errorCode != 0) {
+                    PutStr("ProjectX: Failed to launch tool.\n");
+                    success = FALSE;
+                }
+            }
+        }
+        
+        
+        /* Restore original directory */
+        if (oldDir != NULL) {
+            CurrentDir(oldDir);
+        }
+        
+        /* Free resources */
+        UnLock(fileLock);
+        if (defaultTool != NULL) {
+            FreeVec(defaultTool);
+        }
+        FreeArgs(rdargs);
+        Cleanup();
+        
+        return success ? RETURN_OK : RETURN_FAIL;
     }
     
     /* Get WBStartup message */
@@ -201,6 +365,26 @@ BOOL InitializeLibraries(VOID)
         return FALSE;
     }
     
+    /* Open input.device for qualifier checking (optional - not critical) */
+    InputPort = CreateMsgPort();
+    if (InputPort != NULL) {
+        InputIO = (struct IOStdReq *)CreateIORequest(InputPort, sizeof(struct IOStdReq));
+        if (InputIO != NULL) {
+            if (OpenDevice("input.device", 0, (struct IORequest *)InputIO, 0) == 0) {
+                /* Set InputBase to the library base inside the device structure */
+                InputBase = (struct Library *)InputIO->io_Device;
+            } else {
+                DeleteIORequest((struct IORequest *)InputIO);
+                InputIO = NULL;
+                DeleteMsgPort(InputPort);
+                InputPort = NULL;
+            }
+        } else {
+            DeleteMsgPort(InputPort);
+            InputPort = NULL;
+        }
+    }
+    
     /* Open log file */
     /* logFile = Open("codecraft:projectx.log", MODE_NEWFILE); */
     /* if (logFile == NULL) { */
@@ -289,6 +473,17 @@ VOID Cleanup(VOID)
     if (IntuitionBase) {
         CloseLibrary((struct Library *)IntuitionBase);
         IntuitionBase = NULL;
+    }
+    
+    if (InputIO != NULL) {
+        CloseDevice((struct IORequest *)InputIO);
+        DeleteIORequest((struct IORequest *)InputIO);
+        InputIO = NULL;
+        InputBase = NULL;
+    }
+    if (InputPort != NULL) {
+        DeleteMsgPort(InputPort);
+        InputPort = NULL;
     }
     
     /* if (logFile != NULL) { */
@@ -477,6 +672,26 @@ STRPTR GetProjectXName(struct WBStartup *wbs)
     return nameBuffer;
 }
 
+/* Check if Left Shift key is currently held down */
+BOOL IsLeftShiftHeld(VOID)
+{
+    UWORD qualifier;
+    
+    if (InputBase == NULL) {
+        return FALSE;
+    }
+    
+    /* PeekQualifier returns the current qualifier state */
+    qualifier = PeekQualifier();
+    
+    /* Check if Left Shift key is held */
+    if (qualifier & IEQUALIFIER_LSHIFT) {
+        return TRUE;
+    }
+    
+    return FALSE;
+}
+
 /* Show error dialog */
 VOID ShowErrorDialog(STRPTR title, STRPTR message)
 {
@@ -614,8 +829,18 @@ BOOL OpenFileWithDefaultTool(STRPTR fileName, BPTR fileLock)
     }
     
     /* Step 2: Get default tool for this file type */
-    defIconName[0] = '\0';
-    defaultTool = GetDefaultToolFromType(typeIdentifier, defIconName, sizeof(defIconName));
+    /* Check if Left Shift is held - if so, use MultiView instead of DefIcons default tool */
+    if (IsLeftShiftHeld()) {
+        /* Left Shift held - use MultiView as universal fallback viewer */
+        defaultTool = AllocVec(strlen("MultiView") + 1, MEMF_CLEAR);
+        if (defaultTool != NULL) {
+            Strncpy((UBYTE *)defaultTool, "MultiView", strlen("MultiView") + 1);
+        }
+    } else {
+        /* Normal path - get default tool from DefIcons */
+        defIconName[0] = '\0';
+        defaultTool = GetDefaultToolFromType(typeIdentifier, defIconName, sizeof(defIconName));
+    }
     /* LogMessage("ProjectX: Default tool=%s defIconName=%s\n", defaultTool ? defaultTool : (STRPTR)"(null)", defIconName); */
     
     if (!defaultTool || *defaultTool == '\0') {
