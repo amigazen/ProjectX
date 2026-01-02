@@ -70,7 +70,7 @@ BOOL IsProjectX(STRPTR toolName);
 STRPTR GetProjectXName(struct WBStartup *wbs);
 BOOL IsLeftShiftHeld(VOID);
 
-static const char *verstag = "$VER: ProjectX 47.2 (1.1.2026)\n";
+static const char *verstag = "$VER: ProjectX 47.2 (2/1/2026)\n";
 static const char *stack_cookie = "$STACK: 4096\n";
 const long oslibversion = 47L;
 
@@ -158,9 +158,22 @@ int main(int argc, char *argv[])
         {
             BPTR parentLock;
             STRPTR filePartPtr;
+            UBYTE fileNameCopy[256];
+            STRPTR fileNamePart = NULL;
             
             /* Get just the filename part */
             filePartPtr = FilePart(fileName);
+            
+            /* Make a copy of the filename part to ensure it's valid */
+            /* FilePart returns a pointer into the original string, which may become invalid */
+            if (filePartPtr != NULL && *filePartPtr != '\0') {
+                /* Use full buffer size - Strncpy will handle truncation and null-termination */
+                Strncpy(fileNameCopy, filePartPtr, sizeof(fileNameCopy));
+                fileNamePart = fileNameCopy;
+            } else {
+                /* Fallback: use the original fileName if FilePart fails */
+                fileNamePart = fileName;
+            }
             
             /* Get parent directory lock */
             parentLock = ParentDir(fileLock);
@@ -177,7 +190,7 @@ int main(int argc, char *argv[])
             oldDir = CurrentDir(fileLock);
             
             /* Get file type identifier using filename and directory lock */
-            typeIdentifier = GetFileTypeIdentifier(filePartPtr, fileLock);
+            typeIdentifier = GetFileTypeIdentifier(fileNamePart, fileLock);
             
             if (!typeIdentifier || *typeIdentifier == '\0') {
                 PutStr("ProjectX: Could not identify file type.\n");
@@ -216,7 +229,7 @@ int main(int argc, char *argv[])
                 tags[0].ti_Tag = WBOPENA_ArgLock;
                 tags[0].ti_Data = (ULONG)fileLock;
                 tags[1].ti_Tag = WBOPENA_ArgName;
-                tags[1].ti_Data = (ULONG)filePartPtr;
+                tags[1].ti_Data = (ULONG)fileNamePart;
                 tags[2].ti_Tag = TAG_DONE;
                 
                 /* Clear any previous error */

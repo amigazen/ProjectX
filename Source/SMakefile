@@ -50,9 +50,9 @@ clean:
 
 # Install target
 install:
-	@echo "Installing ProjectX to SDK/C/ProjectX..."
+	@echo "Installing ProjectX to /SDK/C..."
 	@copy $(PROGRAM) to /SDK/C/$(PROGRAM) CLONE
-	@echo "Installing AppX to SDK/C/AppX..."
+	@echo "Installing AppX to /SDK/C..."
 	@copy $(APPX_PROGRAM) to /SDK/C/$(APPX_PROGRAM) CLONE
 
 # Dependencies
